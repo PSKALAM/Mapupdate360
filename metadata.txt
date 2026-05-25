@@ -1,0 +1,19 @@
+[general]
+name=Mapupdate360
+qgisMinimumVersion=3.12
+qgisMaximumVersion=3.99
+description=Use 360/equirectangular street-view images to visualize field context and update 2D GIS layer information.
+about=Mapupdate360 helps QGIS users create photo point layers from geotagged 360 images, visualize local equirectangular imagery, navigate image sequences, view live map direction/frustum, enhance image display, and create privacy-safe copies with camera-bottom blur/cover masking. This plugin is derived from the original Equirectangular Viewer plugin by Francisco Raga / All4GIS, with substantial enhancements by Pankaj Singh Kalam for 360-image-based 2D GIS map updating workflows.
+version=1.0
+author=Pankaj Singh Kalam
+email=pankajsinghkalam@gmail.com
+icon=images/icon.png
+tags=360,equirectangular,street view,photo points,map update,field survey,privacy
+homepage=https://github.com/pankajsinghkalam/Mapupdate360
+tracker=https://github.com/pankajsinghkalam/Mapupdate360/issues
+repository=https://github.com/pankajsinghkalam/Mapupdate360
+category=Vector
+license=GPL-3.0-or-later
+changelog=1.0: Released as Mapupdate360; added photo point creation, flexible layer detection, live frustum/FOV update, image enhancement controls, and camera-bottom privacy masking tools. Credits retained for the original Equirectangular Viewer by Francisco Raga / All4GIS.
+experimental=False
+deprecated=False
