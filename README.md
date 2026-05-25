@@ -12,31 +12,12 @@ image is panned or zoomed, and provide quick image enhancement controls.
 
 - Create a point shapefile/photo layer directly from geotagged JPG/TIFF images.
 - Read GPS latitude, longitude, date/time, and GPS track/image direction from EXIF.
-- Use flexible image path fields instead of a hard-coded layer name.
 - Open local equirectangular/360 images in QGIS using Marzipano.
 - Navigate previous/next images using an order field.
 - Show a live direction frustum on the map that updates with image pan and zoom/FOV.
 - Adjust brightness, contrast, and saturation inside the viewer.
 - Create privacy-safe image copies using bottom/camera-nadir blur or cover masking.
 - Generate a new layer from an existing photo layer using **Hide/Blur Camera Bottom**.
-
-## Publishing Notes
-
-The Python package/internal plugin folder is named `Mapupdate360`, while the
-public plugin name shown in QGIS is **Mapupdate360**.
-
-Before uploading to the official QGIS Plugin Repository, replace the placeholder
-email in `metadata.txt`:
-
-```ini
-email=replace-with-your-email@example.com
-```
-
-Suggested GitHub repository:
-
-```text
-https://github.com/pankajsinghkalam/Mapupdate360
-```
 
 ## Credits
 
