@@ -1,13 +1,10 @@
 # Changelog
 
-## 1.3
-
-- Removed the development `compile.sh` shell script from the upload package to satisfy QGIS suspicious file security checks.
-
 ## 1.2
 
 - Reworked GPano/XMP metadata reading to avoid XML parsing of untrusted image metadata.
 - Kept support for `PoseHeadingDegrees`, pitch, and roll using a lightweight metadata text scanner.
+- Removed the development `compile.sh` shell script from the upload package to satisfy QGIS suspicious file security checks.
 - Prepared the package for a fresh QGIS Plugin Repository security scan.
 
 ## 1.1
