@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1
+
+- Added GPano/XMP panorama orientation metadata support for `PoseHeadingDegrees`, pitch, and roll.
+- Added raw heading audit fields: `pose_head`, `gps_imgdir`, `gps_track`, `yaw_source`, and `mount_off`.
+- Added optional camera mount offset correction in the Create Photo Point Layer dialog for GPSImgDirection and GPSTrack based heading.
+- Added a clear notice when images have no heading metadata and their `direction` is set to `0`.
+- Kept existing viewer behavior backward compatible by continuing to use the `direction` field.
+
 ## 1.0
 
 - Released plugin as **Mapupdate360**.

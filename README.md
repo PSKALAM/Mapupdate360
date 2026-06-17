@@ -12,6 +12,7 @@ image is panned or zoomed, and provide quick image enhancement controls.
 
 - Create a point shapefile/photo layer directly from geotagged JPG/TIFF images.
 - Read GPS latitude, longitude, date/time, and GPS track/image direction from EXIF.
+- Use flexible image path fields instead of a hard-coded layer name.
 - Open local equirectangular/360 images in QGIS using Marzipano.
 - Navigate previous/next images using an order field.
 - Show a live direction frustum on the map that updates with image pan and zoom/FOV.

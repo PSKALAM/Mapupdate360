@@ -210,7 +210,6 @@ class Geo360:
         if layer is not None:
             self.iface.setActiveLayer(layer)
 
-
     def ShowViewer(self, featuresId=None, layer=None):
         """Run dialog Geo360"""
         self.featuresId = featuresId

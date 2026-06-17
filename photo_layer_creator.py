@@ -1,6 +1,7 @@
 import csv
 import os
 import struct
+import xml.etree.ElementTree as ET
 
 from qgis.PyQt.QtCore import Qt, QVariant
 from qgis.PyQt.QtWidgets import (
@@ -67,6 +68,19 @@ class CreatePhotoLayerDialog(QDialog):
         self.privacy_bottom_spin.setRange(5, 45)
         self.privacy_bottom_spin.setValue(18)
         self.privacy_bottom_spin.setSuffix("%")
+        self.mount_offset_check = QCheckBox(
+            "Apply correction for camera mount offset *2"
+        )
+        self.mount_offset_combo = QComboBox()
+        self.mount_offset_combo.addItem("Straight forward (0 deg)", 0)
+        self.mount_offset_combo.addItem("Mounted 90 deg right (+90 deg)", 90)
+        self.mount_offset_combo.addItem("Mounted backward (+180 deg)", 180)
+        self.mount_offset_combo.addItem("Mounted 90 deg left (-90 deg)", -90)
+        self.mount_offset_combo.addItem("Custom offset", None)
+        self.mount_offset_spin = QSpinBox()
+        self.mount_offset_spin.setRange(-359, 359)
+        self.mount_offset_spin.setValue(0)
+        self.mount_offset_spin.setSuffix(" deg")
         self.recursive_check = QCheckBox("Include subfolders")
         self.recursive_check.setChecked(True)
 
@@ -75,10 +89,13 @@ class CreatePhotoLayerDialog(QDialog):
         form.addRow("Layer name", self.layer_name_edit)
         form.addRow("Output shapefile", self._path_row(self.output_edit, self._choose_output))
         form.addRow(
-            "Metadata CSV (optional)",
+            "Metadata CSV (optional) *1",
             self._path_row(self.metadata_edit, self._choose_metadata),
         )
         form.addRow("", self.recursive_check)
+        form.addRow("", self.mount_offset_check)
+        form.addRow("Camera mount", self.mount_offset_combo)
+        form.addRow("Custom mount offset", self.mount_offset_spin)
         form.addRow("", self.privacy_check)
         form.addRow(
             "Processed image folder",
@@ -88,12 +105,21 @@ class CreatePhotoLayerDialog(QDialog):
         form.addRow("Bottom area", self.privacy_bottom_spin)
 
         note = QLabel(
-            "The CSV can override EXIF values when it has columns such as "
-            "filename, latitude, longitude, direction, order, or datetime. "
-            "Processed copies keep original images untouched and are used in the new layer."
+            "*1 Metadata CSV may provide filename, latitude, longitude, order, or datetime.\n"
+            "*2 Camera mount offset is optional. Use it only when heading comes from "
+            "GPSImgDirection or GPSTrack and the camera reference/front lens was not "
+            "aligned with the vehicle movement direction.\n"
+            "GPano pose heading is treated as already north-referenced. Processed "
+            "copies keep original images untouched."
         )
         note.setWordWrap(True)
         note.setStyleSheet("color: #555;")
+
+        self.mount_offset_check.toggled.connect(self._update_mount_offset_state)
+        self.mount_offset_combo.currentIndexChanged.connect(
+            self._update_mount_offset_state
+        )
+        self._update_mount_offset_state()
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -169,6 +195,7 @@ class CreatePhotoLayerDialog(QDialog):
             "output": self.output_edit.text().strip(),
             "metadata": self.metadata_edit.text().strip(),
             "recursive": self.recursive_check.isChecked(),
+            "mount_offset": self._mount_offset_value(),
             "privacy": PrivacyOptions(
                 enabled=self.privacy_check.isChecked(),
                 output_folder=self.privacy_folder_edit.text().strip(),
@@ -182,6 +209,21 @@ class CreatePhotoLayerDialog(QDialog):
         safe = "".join(char if char.isalnum() or char in ("_", "-") else "_" for char in name)
         return safe.strip("_") or "photo_points"
 
+    def _mount_offset_value(self):
+        if not self.mount_offset_check.isChecked():
+            return 0.0
+        value = self.mount_offset_combo.currentData()
+        if value is None:
+            value = self.mount_offset_spin.value()
+        return float(value)
+
+    def _update_mount_offset_state(self):
+        enabled = self.mount_offset_check.isChecked()
+        self.mount_offset_combo.setEnabled(enabled)
+        self.mount_offset_spin.setEnabled(
+            enabled and self.mount_offset_combo.currentData() is None
+        )
+
 
 class PhotoLayerCreator:
     def __init__(self, iface):
@@ -194,13 +236,14 @@ class PhotoLayerCreator:
 
         values = dialog.values()
         try:
-            layer, created, skipped = self.create_layer(
+            layer, created, skipped, notices = self.create_layer(
                 values["folder"],
                 values["output"],
                 values["metadata"],
                 values["recursive"],
                 values["layer_name"],
                 values["privacy"],
+                values["mount_offset"],
             )
         except Exception as exc:
             self._message("Photo layer", str(exc), Qgis.Critical)
@@ -209,9 +252,7 @@ class PhotoLayerCreator:
         QgsProject.instance().addMapLayer(layer)
         self._message(
             "Photo layer",
-            "Created {} point(s). Skipped {} image(s).".format(
-                created, skipped
-            ),
+            self._success_message(created, skipped, notices),
             Qgis.Info,
         )
         return layer
@@ -224,6 +265,7 @@ class PhotoLayerCreator:
         recursive=True,
         layer_name="",
         privacy_options=None,
+        mount_offset=0.0,
     ):
         folder = os.path.normpath(folder)
         output_path = os.path.normpath(output_path)
@@ -251,16 +293,36 @@ class PhotoLayerCreator:
         memory_layer = self._create_memory_layer(display_name)
         provider = memory_layer.dataProvider()
 
-        features = []
+        records = []
         skipped = 0
-        privacy_skipped = 0
         order = 1
-        privacy_processor = PhotoPrivacyProcessor(self.iface)
 
         for image_path in images:
             image_meta = self._read_image_metadata(image_path)
             csv_meta = self._metadata_for_image(metadata, image_path)
-            image_meta.update({k: v for k, v in csv_meta.items() if v not in ("", None)})
+            csv_values = {k: v for k, v in csv_meta.items() if v not in ("", None)}
+            orientation_meta = {
+                key: image_meta.get(key)
+                for key in (
+                    "direction",
+                    "pose_heading",
+                    "gps_img_direction",
+                    "gps_track",
+                    "yaw_source",
+                    "pitch",
+                    "roll",
+                )
+            }
+            image_meta.update(csv_values)
+            for key in orientation_meta:
+                image_meta.pop(key, None)
+            image_meta.update(
+                {
+                    key: value
+                    for key, value in orientation_meta.items()
+                    if value not in ("", None)
+                }
+            )
 
             latitude = self._first_float(
                 image_meta, ("latitude", "lat", "y", "gpslatitude", "gps_latitude")
@@ -273,25 +335,55 @@ class PhotoLayerCreator:
                 skipped += 1
                 continue
 
-            direction = self._first_float(
-                image_meta,
-                (
-                    "direction",
-                    "heading",
-                    "bearing",
-                    "yaw",
-                    "track",
-                    "gpstrack",
-                    "gps_track",
-                    "gpsimgdirection",
-                    "gps_img_direction",
-                ),
-            )
+            direction = self._rational_float(orientation_meta.get("direction"))
             item_order = self._first_int(image_meta, ("order", "sequence", "seq"))
             if direction is None:
                 direction = 0.0
+            yaw_source = self._clean_text(orientation_meta.get("yaw_source")) or "default"
             if item_order is None:
                 item_order = order
+            records.append(
+                {
+                    "image_path": image_path,
+                    "image_meta": image_meta,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "direction": direction,
+                    "order": item_order,
+                    "yaw_source": yaw_source,
+                }
+            )
+            order += 1
+
+        if not records:
+            raise ValueError("No images with GPS coordinates were found.")
+
+        gps_heading_count = sum(
+            1
+            for record in records
+            if record["yaw_source"] in ("gps_img_direction", "gps_track")
+        )
+        default_heading_count = sum(
+            1 for record in records if record["yaw_source"] == "default"
+        )
+        mount_offset = self._rational_float(mount_offset)
+        if mount_offset is None:
+            mount_offset = 0.0
+
+        features = []
+        privacy_skipped = 0
+        privacy_processor = PhotoPrivacyProcessor(self.iface)
+
+        for record in records:
+            image_path = record["image_path"]
+            image_meta = record["image_meta"]
+            direction = record["direction"]
+            yaw_source = record["yaw_source"]
+            applied_offset = 0.0
+            if yaw_source in ("gps_img_direction", "gps_track"):
+                applied_offset = mount_offset
+                direction = (direction + mount_offset) % 360.0
+
             output_image_path = os.path.normpath(image_path)
             if privacy_options.enabled:
                 try:
@@ -305,23 +397,30 @@ class PhotoLayerCreator:
                     privacy_skipped += 1
 
             feature = QgsFeature(memory_layer.fields())
-            feature.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(longitude, latitude)))
+            feature.setGeometry(
+                QgsGeometry.fromPointXY(
+                    QgsPointXY(record["longitude"], record["latitude"])
+                )
+            )
             feature.setAttributes(
                 [
                     output_image_path,
                     float(direction),
-                    int(item_order),
+                    int(record["order"]),
                     os.path.basename(image_path),
                     str(image_meta.get("datetime", "")),
-                    float(latitude),
-                    float(longitude),
+                    float(record["latitude"]),
+                    float(record["longitude"]),
+                    self._optional_float(image_meta.get("pose_heading")),
+                    self._optional_float(image_meta.get("gps_img_direction")),
+                    self._optional_float(image_meta.get("gps_track")),
+                    yaw_source,
+                    self._optional_float(image_meta.get("pitch")),
+                    self._optional_float(image_meta.get("roll")),
+                    float(applied_offset),
                 ]
             )
             features.append(feature)
-            order += 1
-
-        if not features:
-            raise ValueError("No images with GPS coordinates were found.")
 
         provider.addFeatures(features)
         memory_layer.updateExtents()
@@ -344,7 +443,35 @@ class PhotoLayerCreator:
         if not output_layer.isValid():
             raise ValueError("The shapefile was written but QGIS could not load it.")
 
-        return output_layer, len(features), skipped + privacy_skipped
+        notices = []
+        if gps_heading_count and mount_offset:
+            notices.append(
+                "Camera mount offset of {} deg was applied to GPS-based heading records.".format(
+                    self._format_degrees(mount_offset)
+                )
+            )
+        elif gps_heading_count:
+            notices.append("GPS-based heading was used without mount offset.")
+        if default_heading_count:
+            notices.append(
+                "Some images did not contain panorama heading metadata. "
+                "Their direction was set to 0 by default. Check "
+                "yaw_source = default records if orientation is important."
+            )
+
+        return output_layer, len(features), skipped + privacy_skipped, notices
+
+    def _format_degrees(self, value):
+        if float(value).is_integer():
+            return str(int(value))
+        return str(round(value, 6))
+
+    def _success_message(self, created, skipped, notices):
+        parts = [
+            "Created {} point(s). Skipped {} image(s).".format(created, skipped)
+        ]
+        parts.extend(notices or [])
+        return " ".join(parts)
 
     def _create_memory_layer(self, name):
         layer = QgsVectorLayer("Point?crs=EPSG:4326", name or "photo_points", "memory")
@@ -358,6 +485,13 @@ class PhotoLayerCreator:
                 QgsField("datetime", QVariant.String, "", 32),
                 QgsField("latitude", QVariant.Double, "", 20, 8),
                 QgsField("longitude", QVariant.Double, "", 20, 8),
+                QgsField("pose_head", QVariant.Double, "", 20, 6),
+                QgsField("gps_imgdir", QVariant.Double, "", 20, 6),
+                QgsField("gps_track", QVariant.Double, "", 20, 6),
+                QgsField("yaw_source", QVariant.String, "", 32),
+                QgsField("pitch", QVariant.Double, "", 20, 6),
+                QgsField("roll", QVariant.Double, "", 20, 6),
+                QgsField("mount_off", QVariant.Double, "", 20, 6),
             ]
         )
         layer.updateFields()
@@ -365,9 +499,12 @@ class PhotoLayerCreator:
 
     def _read_image_metadata(self, image_path):
         metadata = {}
-        exif = self._read_exif(image_path)
-        if not exif:
+        file_data = self._read_file_bytes(image_path)
+        if not file_data:
             return metadata
+
+        exif = self._read_exif_from_data(file_data)
+        xmp = self._read_xmp_from_data(file_data)
 
         for date_tag in ("datetime_original", "datetime_digitized", "datetime"):
             value = exif.get(date_tag)
@@ -386,27 +523,126 @@ class PhotoLayerCreator:
         if longitude is not None:
             metadata["longitude"] = longitude
 
-        direction = self._rational_float(exif.get("gps_img_direction"))
-        if direction is None:
-            direction = self._rational_float(exif.get("gps_track"))
-        if direction is not None:
-            metadata["direction"] = direction
+        pose_heading = self._rational_float(xmp.get("pose_heading"))
+        gps_img_direction = self._rational_float(exif.get("gps_img_direction"))
+        gps_track = self._rational_float(exif.get("gps_track"))
+        pitch = self._rational_float(xmp.get("pitch"))
+        roll = self._rational_float(xmp.get("roll"))
+
+        if pose_heading is not None:
+            metadata["pose_heading"] = pose_heading
+        if gps_img_direction is not None:
+            metadata["gps_img_direction"] = gps_img_direction
+        if gps_track is not None:
+            metadata["gps_track"] = gps_track
+        if pitch is not None:
+            metadata["pitch"] = pitch
+        if roll is not None:
+            metadata["roll"] = roll
+
+        direction, yaw_source = self._best_orientation(
+            pose_heading, gps_img_direction, gps_track
+        )
+        metadata["direction"] = direction
+        metadata["yaw_source"] = yaw_source
 
         return metadata
 
     def _read_exif(self, image_path):
+        data = self._read_file_bytes(image_path)
+        return self._read_exif_from_data(data)
+
+    def _read_file_bytes(self, image_path):
         try:
             with open(image_path, "rb") as handle:
-                data = handle.read()
+                return handle.read()
         except Exception:
-            return {}
+            return b""
 
+    def _read_exif_from_data(self, data):
         tiff = self._extract_tiff(data)
         if not tiff:
             return {}
 
         parser = ExifParser(tiff)
         return parser.metadata()
+
+    def _read_xmp_from_data(self, data):
+        packet = self._extract_xmp(data)
+        if not packet:
+            return {}
+
+        try:
+            root = ET.fromstring(packet)
+        except Exception:
+            return {}
+
+        metadata = {}
+        fields = {
+            "PoseHeadingDegrees": "pose_heading",
+            "PosePitchDegrees": "pitch",
+            "PoseRollDegrees": "roll",
+        }
+        for element in root.iter():
+            for raw_name, value in element.attrib.items():
+                local_name = self._xml_local_name(raw_name)
+                if local_name in fields:
+                    metadata[fields[local_name]] = self._clean_text(value)
+            local_name = self._xml_local_name(element.tag)
+            if local_name in fields and element.text:
+                metadata[fields[local_name]] = self._clean_text(element.text)
+        return metadata
+
+    def _extract_xmp(self, data):
+        if data[:2] != b"\xff\xd8":
+            return b""
+
+        xmp_header = b"http://ns.adobe.com/xap/1.0/\x00"
+        offset = 2
+        length = len(data)
+        while offset + 4 <= length:
+            if data[offset] != 0xFF:
+                offset += 1
+                continue
+            while offset < length and data[offset] == 0xFF:
+                offset += 1
+            if offset >= length:
+                break
+
+            marker = data[offset]
+            offset += 1
+            if marker in (0xD8, 0xD9):
+                continue
+            if marker == 0xDA or offset + 2 > length:
+                break
+
+            segment_length = struct.unpack(">H", data[offset:offset + 2])[0]
+            segment_start = offset + 2
+            segment_end = offset + segment_length
+            if marker == 0xE1:
+                segment = data[segment_start:segment_end]
+                if segment.startswith(xmp_header):
+                    return segment[len(xmp_header):]
+            offset = segment_end
+        return b""
+
+    def _xml_local_name(self, name):
+        if "}" in name:
+            return name.rsplit("}", 1)[1]
+        if ":" in name:
+            return name.rsplit(":", 1)[1]
+        return name
+
+    def _best_orientation(self, pose_heading, gps_img_direction, gps_track):
+        for source, value in (
+            ("pose_heading", pose_heading),
+            ("gps_img_direction", gps_img_direction),
+            ("gps_track", gps_track),
+        ):
+            number = self._rational_float(value)
+            if number is not None:
+                return number % 360.0, source
+        return 0.0, "default"
 
     def _extract_tiff(self, data):
         if data[:4] in (b"II*\x00", b"MM\x00*"):
@@ -432,7 +668,7 @@ class PhotoLayerCreator:
             if marker == 0xDA or offset + 2 > length:
                 break
 
-            segment_length = struct.unpack(">H", data[offset : offset + 2])[0]
+            segment_length = struct.unpack(">H", data[offset:offset + 2])[0]
             segment_start = offset + 2
             segment_end = offset + segment_length
             if marker == 0xE1:
@@ -518,6 +754,12 @@ class PhotoLayerCreator:
         if value is None:
             return None
         return int(value)
+
+    def _optional_float(self, value):
+        number = self._rational_float(value)
+        if number is None:
+            return None
+        return float(number)
 
     def _rational_float(self, value):
         if value in ("", None):
@@ -650,10 +892,10 @@ class ExifParser:
 
         total_size = unit_size * count
         if total_size <= 4:
-            raw = self.data[value_offset : value_offset + 4][:total_size]
+            raw = self.data[value_offset:value_offset + 4][:total_size]
         else:
             data_offset = self._unpack_long(value_offset)
-            raw = self.data[data_offset : data_offset + total_size]
+            raw = self.data[data_offset:data_offset + total_size]
 
         if len(raw) < total_size:
             return None
@@ -664,27 +906,27 @@ class ExifParser:
             values = list(raw)
         elif tag_type == 3:
             values = [
-                struct.unpack(self.endian + "H", raw[i : i + 2])[0]
+                struct.unpack(self.endian + "H", raw[i:i + 2])[0]
                 for i in range(0, total_size, 2)
             ]
         elif tag_type == 4:
             values = [
-                struct.unpack(self.endian + "L", raw[i : i + 4])[0]
+                struct.unpack(self.endian + "L", raw[i:i + 4])[0]
                 for i in range(0, total_size, 4)
             ]
         elif tag_type == 5:
             values = [
-                self._rational(raw[i : i + 8], signed=False)
+                self._rational(raw[i:i + 8], signed=False)
                 for i in range(0, total_size, 8)
             ]
         elif tag_type == 9:
             values = [
-                struct.unpack(self.endian + "l", raw[i : i + 4])[0]
+                struct.unpack(self.endian + "l", raw[i:i + 4])[0]
                 for i in range(0, total_size, 4)
             ]
         elif tag_type == 10:
             values = [
-                self._rational(raw[i : i + 8], signed=True)
+                self._rational(raw[i:i + 8], signed=True)
                 for i in range(0, total_size, 8)
             ]
         else:
@@ -703,7 +945,7 @@ class ExifParser:
         return float(numerator) / float(denominator)
 
     def _unpack_short(self, offset):
-        return struct.unpack(self.endian + "H", self.data[offset : offset + 2])[0]
+        return struct.unpack(self.endian + "H", self.data[offset:offset + 2])[0]
 
     def _unpack_long(self, offset):
-        return struct.unpack(self.endian + "L", self.data[offset : offset + 4])[0]
+        return struct.unpack(self.endian + "L", self.data[offset:offset + 4])[0]

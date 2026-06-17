@@ -37,9 +37,14 @@ from qgis.PyQt.QtCore import (
     Qt,
     pyqtSignal,
 )
-from qgis.PyQt.QtWidgets import QDialog, QWidget, QDockWidget
-from qgis.PyQt.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSlider
-from qgis.PyQt.QtGui import QColor, QIcon, QImage, QWindow
+from qgis.PyQt.QtWidgets import QDockWidget
+from qgis.PyQt.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSlider,
+)
+from qgis.PyQt.QtGui import QColor, QIcon, QImage
 import Mapupdate360.config as config
 from Mapupdate360.geom.transformgeom import transformGeometry
 from Mapupdate360.gui.ui_orbitalDialog import Ui_orbitalDialog
@@ -53,9 +58,9 @@ class _ViewerPage(QWebPage):
     newData = pyqtSignal(list)  # asynchronous
 
     def javaScriptConsoleMessage(self, msg, line, source):
-        l = msg.split(",")
-        self.obj = l
-        self.newData.emit(l)
+        values = msg.split(",")
+        self.obj = values
+        self.newData.emit(values)
 
 
 class Geo360Dialog(QDockWidget, Ui_orbitalDialog):
@@ -142,8 +147,8 @@ class Geo360Dialog(QDockWidget, Ui_orbitalDialog):
                 if parsed_fov is not None:
                     newFov = parsed_fov
             self.UpdateOrientation(yaw=newYaw, fov=newFov)
-        except:
-            None
+        except Exception:
+            pass
 
     def CreateViewer(self):
         """Create Viewer"""
@@ -374,7 +379,6 @@ class Geo360Dialog(QDockWidget, Ui_orbitalDialog):
     def UpdateOrientation(self, yaw=None, fov=None):
         """Update Orientation"""
         self.drawOrientation(yaw, fov)
-
 
     def setOrientation(self, yaw=None, fov=None):
         """Set Orientation in the firt time"""

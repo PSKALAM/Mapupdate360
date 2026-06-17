@@ -1,0 +1,8 @@
+<RCC>
+    <qresource prefix="Mapupdate360">
+        <file>../images/icon.png</file>
+        <file>../images/Next_Arrow.png</file>
+		<file>../images/Previous_Arrow.png</file>
+		<file>../images/full_screen.png</file>
+    </qresource>
+</RCC>
