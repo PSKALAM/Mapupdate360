@@ -1,7 +1,8 @@
 import csv
+import html
 import os
+import re
 import struct
-import xml.etree.ElementTree as ET
 
 from qgis.PyQt.QtCore import Qt, QVariant
 from qgis.PyQt.QtWidgets import (
@@ -572,26 +573,31 @@ class PhotoLayerCreator:
         if not packet:
             return {}
 
-        try:
-            root = ET.fromstring(packet)
-        except Exception:
-            return {}
-
         metadata = {}
         fields = {
             "PoseHeadingDegrees": "pose_heading",
             "PosePitchDegrees": "pitch",
             "PoseRollDegrees": "roll",
         }
-        for element in root.iter():
-            for raw_name, value in element.attrib.items():
-                local_name = self._xml_local_name(raw_name)
-                if local_name in fields:
-                    metadata[fields[local_name]] = self._clean_text(value)
-            local_name = self._xml_local_name(element.tag)
-            if local_name in fields and element.text:
-                metadata[fields[local_name]] = self._clean_text(element.text)
+        text = packet.decode("utf-8", errors="ignore")
+        for xmp_name, field_name in fields.items():
+            value = self._xmp_field_value(text, xmp_name)
+            if value:
+                metadata[field_name] = self._clean_text(html.unescape(value))
         return metadata
+
+    def _xmp_field_value(self, text, field_name):
+        patterns = (
+            r"(?:GPano:)?%s\s*=\s*['\"]([^'\"]+)['\"]",
+            r"<(?:GPano:)?%s(?:\s[^>]*)?>([^<]+)</(?:GPano:)?%s>",
+        )
+        escaped = re.escape(field_name)
+        for pattern in patterns:
+            regex = pattern % (escaped, escaped) if pattern.count("%s") == 2 else pattern % escaped
+            match = re.search(regex, text, re.IGNORECASE)
+            if match:
+                return match.group(1)
+        return None
 
     def _extract_xmp(self, data):
         if data[:2] != b"\xff\xd8":
@@ -625,13 +631,6 @@ class PhotoLayerCreator:
                     return segment[len(xmp_header):]
             offset = segment_end
         return b""
-
-    def _xml_local_name(self, name):
-        if "}" in name:
-            return name.rsplit("}", 1)[1]
-        if ":" in name:
-            return name.rsplit(":", 1)[1]
-        return name
 
     def _best_orientation(self, pose_heading, gps_img_direction, gps_track):
         for source, value in (
