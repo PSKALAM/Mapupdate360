@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3
+
+- Removed the development `compile.sh` shell script from the upload package to satisfy QGIS suspicious file security checks.
+
 ## 1.2
 
 - Reworked GPano/XMP metadata reading to avoid XML parsing of untrusted image metadata.
