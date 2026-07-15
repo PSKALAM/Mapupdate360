@@ -44,7 +44,7 @@ from qgis.PyQt.QtWidgets import (
     QPushButton,
     QSlider,
 )
-from qgis.PyQt.QtGui import QColor, QIcon, QImage
+from qgis.PyQt.QtGui import QColor, QIcon, QImage, QSurfaceFormat
 import Mapupdate360.config as config
 from Mapupdate360.geom.transformgeom import transformGeometry
 from Mapupdate360.gui.ui_orbitalDialog import Ui_orbitalDialog
@@ -86,6 +86,13 @@ class Geo360Dialog(QDockWidget, Ui_orbitalDialog):
             "http://" + config.IP + ":" + str(config.PORT) + "/blank.html"
         )
 
+        # QtWebKit WebGL may fail to initialize on Linux unless Qt
+        # uses an OpenGL compatibility profile.
+        surface_format = QSurfaceFormat()
+        surface_format.setProfile(
+            QSurfaceFormat.CompatibilityProfile
+        )
+        QSurfaceFormat.setDefaultFormat(surface_format)
         # Create Viewer
         self.CreateViewer()
 
